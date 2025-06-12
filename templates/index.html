@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IDS Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Optional: Add some custom styles if needed */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f6; /* Light grey background */
+            color: #333; /* Dark text */
+        }
+        /* Style for the prediction list items */
+        .prediction-item {
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+            cursor: pointer; /* Indicate that the item is clickable */
+            transition: background-color 0.2s ease-in-out;
+        }
+        .prediction-item:hover {
+             background-color: #eef2ff; /* Light blue background on hover */
+        }
+        .prediction-item:last-child {
+            border-bottom: none;
+        }
+         /* Style for containers holding charts */
+        .chart-container {
+            background-color: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px; /* Space between containers */
+            /* Added overflow-hidden to prevent content spilling out if height is constrained */
+            overflow: hidden;
+        }
+         /* Ensure canvas elements inside chart containers fill their parent */
+         .chart-container canvas {
+             width: 100% !important;
+             height: 100% !important;
+         }
+
+         /* Modal styles */
+         .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+         }
+
+         .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto; /* 10% from the top and centered */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%; /* Could be more responsive */
+            max-width: 600px; /* Max width */
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            position: relative;
+         }
+
+         .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+         }
+
+         .close-button:hover,
+         .close-button:focus {
+            color: #000;
+            text-decoration: none;
+            cursor: pointer;
+         }
+    </style>
+     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="p-6">
+
+    <div class="container mx-auto">
+        <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">Intrusion Detection System Dashboard</h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+            <div class="chart-container flex flex-col items-center justify-center h-40"> <h2 class="text-xl font-semibold mb-2 text-gray-700">Total Flows Predicted</h2>
+                <div id="total-flows-counter" class="text-5xl font-bold text-blue-600">0</div>
+            </div>
+
+            <div class="chart-container col-span-1 md:col-span-2 h-80"> <h2 class="text-xl font-semibold mb-4 text-gray-700">Predicted Label Distribution</h2>
+                 <canvas id="labelDistributionChart"></canvas>
+            </div>
+
+             <div class="chart-container h-80 flex flex-col items-center justify-center">
+                 <h2 class="text-xl font-semibold mb-4 text-gray-700">Protocol Distribution</h2>
+                 <div class="w-full h-full flex items-center justify-center mt-[-1rem]">
+                    <canvas id="protocolDistributionChart"></canvas>
+                 </div>
+            </div>
+
+        </div>
+
+
+        <div class="mt-8 chart-container">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Recent Predictions</h2>
+            <div id="predictions-list" class="space-y-2">
+                <p class="text-gray-500">Loading predictions...</p>
+            </div>
+        </div>
+
+    </div>
+
+    <div id="flowDetailsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <h3 class="text-2xl font-bold mb-4 text-gray-800">Flow Details</h3>
+            <div id="flow-details-content">
+                <p>Loading details...</p>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // Flask backend URL (adjust if your Flask app is running on a different address/port)
+        const FLASK_BACKEND_URL = "http://127.0.0.1:5000";
+
+        // Chart instances
+        let labelChart = null;
+        let protocolChart = null;
+
+        // Limit the number of recent predictions to display
+        const maxPredictionsToShow = 20; // Display only the most recent 20 predictions
+
+        // Get the modal elements
+        const modal = document.getElementById("flowDetailsModal");
+        const closeButton = document.getElementsByClassName("close-button")[0];
+        const flowDetailsContent = document.getElementById("flow-details-content");
+
+
+        // Function to fetch and display recent predictions
+        async function fetchAndDisplayPredictions() {
+            try {
+                const response = await fetch(`${FLASK_BACKEND_URL}/data`);
+                const predictions = await response.json();
+
+                const predictionsListDiv = document.getElementById('predictions-list');
+                predictionsListDiv.innerHTML = ''; // Clear previous predictions
+
+                if (predictions.length === 0) {
+                    predictionsListDiv.innerHTML = '<p class="text-gray-500">No predictions received yet.</p>';
+                    return;
+                }
+
+                // Sort by timestamp in descending order (latest first)
+                predictions.sort((a, b) => b.timestamp - a.timestamp);
+                // Take the top N predictions based on maxPredictionsToShow
+                const recentPredictions = predictions.slice(0, maxPredictionsToShow);
+
+
+                // Display recent predictions
+                recentPredictions.forEach(prediction => {
+                    const predictionElement = document.createElement('div');
+                    predictionElement.classList.add('prediction-item', 'text-sm');
+                    // --- Add data attribute for flow ID and make it clickable ---
+                    predictionElement.dataset.flowId = prediction.flow_id; // Store flow ID
+                    predictionElement.addEventListener('click', () => displayFlowDetails(prediction.flow_id)); // Add click listener
+                    // ----------------------------------------------------------
+
+                    // Format timestamp (optional, depends on how timestamp is sent)
+                    const date = new Date(prediction.timestamp); // Assuming timestamp is in milliseconds
+                    const formattedTimestamp = date.toLocaleString(); // Adjust format as needed
+
+                    // Apply color based on label
+                    let labelColorClass = 'text-green-600'; // Default for BENIGN
+                    if (prediction.predicted_label !== 'BENIGN') {
+                        labelColorClass = 'text-red-600 font-bold'; // Red for attacks
+                    }
+
+
+                    predictionElement.innerHTML = `
+                        <p><strong>Flow ID:</strong> ${prediction.flow_id}</p>
+                        <p><strong>Timestamp:</strong> ${formattedTimestamp}</p>
+                        <p><strong>Source:</strong> ${prediction.src_ip}:${prediction.src_port}</p>
+                        <p><strong>Destination:</strong> ${prediction.dst_ip}:${prediction.dst_port}</p>
+                        <p><strong>Protocol:</strong> ${prediction.protocol}</p> <p><strong>Packet Count:</strong> ${prediction.packet_count}</p>
+                        <p><strong>Predicted Label:</strong> <span class="${labelColorClass}">${prediction.predicted_label}</span></p>
+                        <p><strong>Probability:</strong> ${prediction.probability.toFixed(4)}</p>
+                    `;
+                     predictionsListDiv.appendChild(predictionElement);
+                });
+
+            } catch (error) {
+                console.error("Error fetching predictions:", error);
+                document.getElementById('predictions-list').innerHTML = '<p class="text-red-500">Error loading predictions.</p>';
+            }
+        }
+
+         // Function to fetch and update visualization data
+        async function fetchAndDisplayVizData() {
+            try {
+                const response = await fetch(`${FLASK_BACKEND_URL}/viz_data`);
+                const vizData = await response.json();
+
+                // Update Total Flows Counter
+                document.getElementById('total-flows-counter').innerText = vizData.total_flows;
+
+                // Update Label Distribution Chart
+                updateChart(labelChart, 'labelDistributionChart', 'bar', vizData.label_counts, 'Predicted Label');
+
+                // Update Protocol Distribution Chart (now uses mapped names from backend)
+                updateChart(protocolChart, 'protocolDistributionChart', 'pie', vizData.protocol_counts, 'Protocol');
+
+
+            } catch (error) {
+                console.error("Error fetching visualization data:", error);
+            }
+        }
+
+        // Helper function to create or update a chart
+        function updateChart(chartInstance, canvasId, chartType, data, labelText) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+
+            // Prepare data for Chart.js
+            const labels = Object.keys(data);
+            const values = Object.values(data);
+
+            // Destroy previous chart instance if it exists
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            // Define colors (can be expanded for more labels/protocols)
+            const backgroundColors = [
+                'rgba(54, 162, 235, 0.6)', // Blue
+                'rgba(255, 99, 132, 0.6)', // Red
+                'rgba(255, 206, 86, 0.6)', // Yellow
+                'rgba(75, 192, 192, 0.6)', // Green
+                'rgba(153, 102, 255, 0.6)', // Purple
+                'rgba(255, 159, 64, 0.6)', // Orange
+                'rgba(199, 199, 199, 0.6)' // Grey
+            ];
+             const borderColors = [
+                'rgba(54, 162, 235, 1)',
+                'rgba(255, 99, 132, 1)',
+                'rgba(255, 206, 86, 1)',
+                'rgba(75, 192, 192, 1)',
+                'rgba(153, 102, 255, 1)',
+                'rgba(255, 159, 64, 1)',
+                'rgba(199, 199, 199, 1)'
+            ];
+
+            // Create new chart instance
+            chartInstance = new Chart(ctx, {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: labelText,
+                        data: values,
+                        backgroundColor: backgroundColors.slice(0, labels.length), // Use enough colors
+                        borderColor: borderColors.slice(0, labels.length),
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                     responsive: true, // Make chart responsive
+                     maintainAspectRatio: false, // Allow aspect ratio to be controlled by container
+                    scales: chartType === 'bar' ? { // Only apply scales for bar chart
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Count'
+                            }
+                        },
+                         x: {
+                             title: {
+                                 display: true,
+                                 text: labelText
+                             }
+                         }
+                    } : {}, // No scales for pie chart
+                    plugins: {
+                        legend: {
+                            display: chartType !== 'pie', // Hide legend for pie chart (labels are on slices)
+                            position: 'top',
+                        },
+                         tooltip: {
+                             enabled: true
+                         }
+                    }
+                }
+            });
+
+            // Return the new chart instance
+            if (canvasId === 'labelDistributionChart') {
+                labelChart = chartInstance;
+            } else if (canvasId === 'protocolDistributionChart') {
+                protocolChart = chartInstance;
+            }
+        }
+
+        // --- New: Function to display flow details in the modal ---
+        async function displayFlowDetails(flowId) {
+            flowDetailsContent.innerHTML = '<p>Loading details...</p>'; // Loading message
+            modal.style.display = "block"; // Show the modal
+
+            try {
+                const response = await fetch(`${FLASK_BACKEND_URL}/flow_details/${flowId}`);
+                const flowDetails = await response.json();
+
+                if (flowDetails.status === 'error') {
+                     flowDetailsContent.innerHTML = `<p class="text-red-500">${flowDetails.message}</p>`;
+                     return;
+                }
+
+                // Format timestamp
+                const date = new Date(flowDetails.timestamp);
+                const formattedTimestamp = date.toLocaleString();
+
+                // Apply color based on label
+                let labelColorClass = 'text-green-600'; // Default for BENIGN
+                if (flowDetails.predicted_label !== 'BENIGN') {
+                    labelColorClass = 'text-red-600 font-bold'; // Red for attacks
+                }
+
+                // Populate the modal content
+                flowDetailsContent.innerHTML = `
+                    <p><strong>Flow ID:</strong> ${flowDetails.flow_id}</p>
+                    <p><strong>Timestamp:</strong> ${formattedTimestamp}</p>
+                    <p><strong>Source:</strong> ${flowDetails.src_ip}:${flowDetails.src_port}</p>
+                    <p><strong>Destination:</strong> ${flowDetails.dst_ip}:${flowDetails.dst_port}</p>
+                    <p><strong>Protocol:</strong> ${flowDetails.protocol_name} (${flowDetails.protocol})</p>
+                    <p><strong>Packet Count:</strong> ${flowDetails.packet_count}</p>
+                    <p><strong>Predicted Label:</strong> <span class="${labelColorClass}">${flowDetails.predicted_label}</span></p>
+                    <p><strong>Probability:</strong> ${flowDetails.probability.toFixed(4)}</p>
+                    `;
+
+            } catch (error) {
+                console.error(`Error fetching details for flow ${flowId}:`, error);
+                flowDetailsContent.innerHTML = '<p class="text-red-500">Error loading flow details.</p>';
+            }
+        }
+        // -----------------------------------------------------------
+
+        // --- Close the modal when the close button is clicked ---
+        closeButton.onclick = function() {
+          modal.style.display = "none";
+        }
+        // -----------------------------------------------------------
+
+        // --- Close the modal when the user clicks anywhere outside of the modal content ---
+        window.onclick = function(event) {
+          if (event.target == modal) {
+            modal.style.display = "none";
+          }
+        }
+        // ------------------------------------------------------------------------------------
+
+
+        // Fetch data initially and then poll periodically
+        fetchAndDisplayPredictions();
+        fetchAndDisplayVizData();
+
+        // Poll for new data every few seconds
+        setInterval(fetchAndDisplayPredictions, 3000); // Poll predictions list every 3 seconds
+        setInterval(fetchAndDisplayVizData, 5000); // Poll visualization data every 5 seconds (can be different)
+
+    </script>
+
+</body>
+</html>
